@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 	"hash/fnv"
+	"net/url"
+	"bytes"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
@@ -26,8 +28,6 @@ import (
 	"github.com/labstack/echo/middleware"
 	"github.com/newrelic/go-agent"
 	"github.com/go-redis/redis"
-	"net/url"
-	"bytes"
 )
 
 const (
@@ -310,9 +310,6 @@ func getInitialize(c echo.Context) error {
 			if err != nil {
 				log.Println("Failed to scan data:", err)
 				return
-			}
-			if hosts[hash(name) % len(hosts)] != me {
-				continue
 			}
 			err = ioutil.WriteFile(iconsDir + "/" + name, data, 0777)
 			if err != nil {
@@ -879,10 +876,8 @@ func postProfile(c echo.Context) error {
 	}
 
 	if avatarName != "" && len(avatarData) > 0 {
-		redirect := hosts[hash(avatarName) % len(hosts)]
-		if redirect != me {
-			toURL := "http://" + redirect + "/profile"
-			log.Println("postProfile redirect to:", toURL)
+		for _, host := range hosts {
+			toURL := "http://" + host + "/icons/" + avatarName
 			req := c.Request()
 			url2, err := url.Parse(toURL)
 			if err != nil {
@@ -905,19 +900,7 @@ func postProfile(c echo.Context) error {
 				log.Println("Failed to PostProfile2.7:", err)
 				return err
 			}
-			defer resp.Body.Close()
-			bs, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				log.Println("Failed to PostProfile2.9:", err)
-				return err
-			}
-			c.Response().Write(bs)
-			return nil
-		}
-		err := ioutil.WriteFile(iconsDir + "/" + avatarName, avatarData, 0777)
-		if err != nil {
-			log.Println("Failed to PostProfile3:", err)
-			return err
+			resp.Body.Close()
 		}
 		s2 := StartMySQLSegment(txn, "user", "UPDATE")
 		_, err = db.Exec("UPDATE user SET avatar_icon = ? WHERE id = ?", avatarName, self.ID)
@@ -946,41 +929,6 @@ func getIcon(c echo.Context) error {
 	defer txn.End()
 	fname := c.Param("file_name")
 	fpath := iconsDir + "/" + fname
-	redirect := hosts[hash(fname) % len(hosts)]
-	if redirect != me {
-		toURL := "http://" + redirect + "/icons/" + fname
-		log.Println("getIcon Redirect to:", toURL)
-		req := c.Request()
-		url2, err := url.Parse(toURL)
-		if err != nil {
-			log.Println("Failed to getIcon0.5:", err)
-			return err
-		}
-		buffer, err := ioutil.ReadAll(req.Body)
-		if err != nil {
-			log.Println("Failed to getIcon0.6:", err)
-			return err
-		}
-		newreq, err := http.NewRequest(req.Method, url2.String(), bytes.NewBuffer(buffer))
-		if err != nil {
-			log.Println("Failed to getIcon0.65:", err)
-			return err
-		}
-		newreq.Header = req.Header
-		resp, err := http.DefaultClient.Do(newreq)
-		if err != nil {
-			log.Println("Failed to getIcon0.7:", err)
-			return err
-		}
-		defer resp.Body.Close()
-		bs, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Println("Failed to getIcon0.9:", err)
-			return err
-		}
-		c.Response().Write(bs)
-		return nil
-	}
 	if _, err := os.Stat(fpath); os.IsNotExist(err) {
 		var name string
 		var data []byte
@@ -1028,6 +976,57 @@ func getIcon(c echo.Context) error {
 	defer file.Close()
 	http.ServeContent(w, c.Request(), fpath, time.Time{}, file)
 	return nil
+}
+
+func postIcon(c echo.Context) error {
+	txn := app.StartTransaction("postIcon", c.Response().Writer, c.Request())
+	defer txn.End()
+
+	avatarName := ""
+	var avatarData []byte
+
+	if fh, err := c.FormFile("avatar_icon"); err == http.ErrMissingFile {
+		// no file upload
+	} else if err != nil {
+		log.Println("Failed to postIcon1:", err)
+		return err
+	} else {
+		dotPos := strings.LastIndexByte(fh.Filename, '.')
+		if dotPos < 0 {
+			return ErrBadReqeust
+		}
+		ext := fh.Filename[dotPos:]
+		switch ext {
+		case ".jpg", ".jpeg", ".png", ".gif":
+			break
+		default:
+			return ErrBadReqeust
+		}
+
+		file, err := fh.Open()
+		if err != nil {
+			log.Println("Failed to PostIcon2:", err)
+			return err
+		}
+		avatarData, _ = ioutil.ReadAll(file)
+		file.Close()
+
+		if len(avatarData) > avatarMaxBytes {
+			return ErrBadReqeust
+		}
+
+		avatarName = fmt.Sprintf("%x%s", sha1.Sum(avatarData), ext)
+	}
+
+	if avatarName != "" && len(avatarData) > 0 {
+		err := ioutil.WriteFile(iconsDir + "/" + avatarName, avatarData, 0777)
+		if err != nil {
+			log.Println("Failed to PostIcon3:", err)
+			return err
+		}
+	}
+
+	return c.String(http.StatusOK, "")
 }
 
 func tAdd(a, b int64) int64 {
@@ -1084,6 +1083,7 @@ func main() {
 	e.GET("add_channel", getAddChannel)
 	e.POST("add_channel", postAddChannel)
 	e.GET("/icons/:file_name", getIcon)
+	e.POST("/icons/:file_name", postIcon)
 
 	e.Start(":5000")
 }
