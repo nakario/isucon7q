@@ -965,14 +965,9 @@ func getIcon(c echo.Context) error {
 		log.Println("Failed to getIcon2:", err)
 		return err
 	}
-	data, err := ioutil.ReadFile(fpath)
-	if err != nil {
-		log.Println("Failed to getIcon3:", err)
-		return err
-	}
-	etag := sha1.Sum(data)
+	etag := hash(fname)
 	w := c.Response().Writer
-	w.Header().Set("ETag", strconv.Quote(string(etag[:])))
+	w.Header().Set("ETag", strconv.Quote(strconv.Itoa(etag)))
 	file, err := os.Open(fpath)
 	if err != nil {
 		log.Println("Failed to getIcon4:", err)
