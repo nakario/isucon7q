@@ -26,6 +26,7 @@ import (
 	"github.com/labstack/echo/middleware"
 	"github.com/newrelic/go-agent"
 	"github.com/go-redis/redis"
+	"net/url"
 )
 
 const (
@@ -882,7 +883,26 @@ func postProfile(c echo.Context) error {
 			url_ := c.Request().URL
 			toURL := url_.Scheme + "//" + redirect + "/" + c.Path()
 			log.Println("postProfile redirect to:", toURL)
-			c.Redirect(http.StatusTemporaryRedirect, toURL)
+			req := c.Request()
+			url2, err := url.Parse(toURL)
+			if err != nil {
+				log.Println("Failed to PostProfile2.5:", err)
+				return err
+			}
+			req.URL = url2
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				log.Println("Failed to PostProfile2.7:", err)
+				return err
+			}
+			defer resp.Body.Close()
+			bs, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				log.Println("Failed to PostProfile2.9:", err)
+				return err
+			}
+			c.Response().Write(bs)
+			return nil
 		}
 		err := ioutil.WriteFile(iconsDir + "/" + avatarName, avatarData, 0777)
 		if err != nil {
@@ -921,7 +941,26 @@ func getIcon(c echo.Context) error {
 		url_ := c.Request().URL
 		toURL := url_.Scheme + "//" + redirect + "/" + c.Path()
 		log.Println("getIcon Redirect to:", toURL)
-		c.Redirect(http.StatusTemporaryRedirect, toURL)
+		req := c.Request()
+		url2, err := url.Parse(toURL)
+		if err != nil {
+			log.Println("Failed to getIcon0.5:", err)
+			return err
+		}
+		req.URL = url2
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Println("Failed to getIcon0.7:", err)
+			return err
+		}
+		defer resp.Body.Close()
+		bs, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Println("Failed to getIcon0.9:", err)
+			return err
+		}
+		c.Response().Write(bs)
+		return nil
 	}
 	if _, err := os.Stat(fpath); os.IsNotExist(err) {
 		var name string
