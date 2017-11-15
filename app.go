@@ -706,12 +706,6 @@ func getHistory(c echo.Context) error {
 		return ErrBadReqeust
 	}
 
-	messages := []Message{}
-	s2 := StartMySQLSegment(txn, "message", "SELECT")
-	err = db.Select(&messages,
-		"SELECT * FROM message WHERE channel_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
-		chID, N, (page-1)*N)
-	s2.End()
 	unifieds, err := rd.LRange(keyMessages(chID), (page - 1) * N, page * N - 1).Result()
 	if err != nil {
 		log.Println("Failed to getHistory2:", err)
