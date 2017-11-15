@@ -232,6 +232,7 @@ func register(txn newrelic.Transaction, name, password string) (int64, error) {
 func getInitialize(c echo.Context) error {
 	txn := app.StartTransaction("getInitialize", c.Response().Writer, c.Request())
 	defer txn.End()
+	after := time.After(9 * time.Second)
 	db.MustExec("DELETE FROM user WHERE id > 1000")
 	db.MustExec("DELETE FROM image WHERE id > 1001")
 	os.RemoveAll(iconsDir)
@@ -262,6 +263,7 @@ func getInitialize(c echo.Context) error {
 	db.MustExec("DELETE FROM channel WHERE id > 10")
 	db.MustExec("DELETE FROM message WHERE id > 10000")
 	db.MustExec("DELETE FROM haveread")
+	<-after
 	return c.String(204, "")
 }
 
@@ -448,6 +450,7 @@ func queryResponse(txn newrelic.Transaction, chanID, oldLastID int64) (response 
 	rows, err := db.Query("SELECT m.id, m.created_at, m.content, u.name, u.display_name, u.avatar_icon " +
 		"FROM message AS m INNER JOIN user AS u ON m.user_id = u.id " +
 		"WHERE m.id > ? AND m.channel_id = ? ORDER BY m.id DESC LIMIT 100", oldLastID, chanID)
+	defer rows.Close()
 	if err != nil {
 		s.End()
 		return nil, 0, err
@@ -472,7 +475,6 @@ func queryResponse(txn newrelic.Transaction, chanID, oldLastID int64) (response 
 			first = false
 		}
 	}
-	rows.Close()
 	s.End()
 
 	l := len(response)
