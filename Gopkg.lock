@@ -68,6 +68,12 @@
   version = "v0.0.3"
 
 [[projects]]
+  name = "github.com/newrelic/go-agent"
+  packages = [".","internal","internal/jsonx","internal/logger","internal/sysinfo","internal/utilization"]
+  revision = "462a146a1270954750aac98c5b3e83dec6a9adfd"
+  version = "v1.10.0"
+
+[[projects]]
   branch = "master"
   name = "github.com/valyala/bytebufferpool"
   packages = ["."]
@@ -94,6 +100,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "9d36470f0563bf7a47836bd9683357e361e744892223667a231bf07b98f8882f"
+  inputs-digest = "07a1d1ea368b61c66084057301a5c00e62d88a4205a6b3f20514be9936ebdcd3"
   solver-name = "gps-cdcl"
   solver-version = 1
