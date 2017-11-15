@@ -28,6 +28,7 @@ import (
 
 const (
 	avatarMaxBytes = 1 * 1024 * 1024
+	iconsDir = "/home/isucon/icons"
 )
 
 var (
@@ -233,6 +234,30 @@ func getInitialize(c echo.Context) error {
 	defer txn.End()
 	db.MustExec("DELETE FROM user WHERE id > 1000")
 	db.MustExec("DELETE FROM image WHERE id > 1001")
+	os.RemoveAll(iconsDir)
+	os.Mkdir(iconsDir, 0777)
+	go func() {
+		rows, err := db.Query("SELECT name, data FROM image")
+		if err != nil {
+			log.Println("Failed to preload image:", err)
+			return
+		}
+		for rows.Next() {
+			var name string
+			var data []byte
+			err := rows.Scan(&name, &data)
+			if err != nil {
+				log.Println("Failed to scan data:", err)
+				return
+			}
+			err = ioutil.WriteFile(iconsDir + "/" + name, data, 0777)
+			if err != nil {
+				log.Println("Failed to write file:", err)
+				return
+			}
+		}
+		log.Println("Finished preloading images.")
+	}()
 	db.MustExec("DELETE FROM channel WHERE id > 10")
 	db.MustExec("DELETE FROM message WHERE id > 10000")
 	db.MustExec("DELETE FROM haveread")
@@ -750,9 +775,7 @@ func postProfile(c echo.Context) error {
 	}
 
 	if avatarName != "" && len(avatarData) > 0 {
-		s1 := StartMySQLSegment(txn, "image", "INSERT")
-		_, err := db.Exec("INSERT INTO image (name, data) VALUES (?, ?)", avatarName, avatarData)
-		s1.End()
+		err := ioutil.WriteFile(iconsDir + "/" + avatarName, avatarData, 0777)
 		if err != nil {
 			return err
 		}
@@ -779,31 +802,50 @@ func postProfile(c echo.Context) error {
 func getIcon(c echo.Context) error {
 	txn := app.StartTransaction("getIcon", c.Response().Writer, c.Request())
 	defer txn.End()
-	var name string
-	var data []byte
-	s := StartMySQLSegment(txn, "image", "SELECT")
-	err := db.QueryRow("SELECT name, data FROM image WHERE name = ?",
-		c.Param("file_name")).Scan(&name, &data)
-	s.End()
-	if err == sql.ErrNoRows {
-		return echo.ErrNotFound
+	fname := iconsDir + "/" + c.Param("file_name")
+	if _, err := os.Stat(fname); os.IsNotExist(err) {
+		var name string
+		var data []byte
+		s := StartMySQLSegment(txn, "image", "SELECT")
+		err := db.QueryRow("SELECT name, data FROM image WHERE name = ?",
+			c.Param("file_name")).Scan(&name, &data)
+		s.End()
+		if err == sql.ErrNoRows {
+			return echo.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+
+		mime := ""
+		switch true {
+		case strings.HasSuffix(name, ".jpg"), strings.HasSuffix(name, ".jpeg"):
+			mime = "image/jpeg"
+		case strings.HasSuffix(name, ".png"):
+			mime = "image/png"
+		case strings.HasSuffix(name, ".gif"):
+			mime = "image/gif"
+		default:
+			return echo.ErrNotFound
+		}
+		return c.Blob(http.StatusOK, mime, data)
+	} else if err != nil {
+		return err
 	}
+	data, err := ioutil.ReadFile(fname)
 	if err != nil {
 		return err
 	}
-
-	mime := ""
-	switch true {
-	case strings.HasSuffix(name, ".jpg"), strings.HasSuffix(name, ".jpeg"):
-		mime = "image/jpeg"
-	case strings.HasSuffix(name, ".png"):
-		mime = "image/png"
-	case strings.HasSuffix(name, ".gif"):
-		mime = "image/gif"
-	default:
-		return echo.ErrNotFound
+	etag := sha1.Sum(data)
+	w := c.Response().Writer
+	w.Header().Set("ETag", strconv.Quote(string(etag[:])))
+	file, err := os.Open(fname)
+	if err != nil {
+		return err
 	}
-	return c.Blob(http.StatusOK, mime, data)
+	defer file.Close()
+	http.ServeContent(w, c.Request(), fname, time.Time{}, file)
+	return nil
 }
 
 func tAdd(a, b int64) int64 {
