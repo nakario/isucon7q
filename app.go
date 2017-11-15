@@ -965,20 +965,21 @@ func getIcon(c echo.Context) error {
 		log.Println("Failed to getIcon2:", err)
 		return err
 	}
-	etag := strconv.Quote(strconv.Itoa(hash(fname)))
-	if c.Request().Header.Get("If-None-Match") == etag {
+	ifms := time.Date(2000,1,1,1,1,1,1, time.UTC)
+	if c.Request().Header.Get("If-Modified-Since") == ifms.Format(http.TimeFormat) {
+		log.Println("return 304")
 		c.String(http.StatusNotModified, "")
 		return nil
 	}
 	w := c.Response().Writer
-	w.Header().Set("ETag", etag)
+	w.Header().Set("Last-Modified", ifms.Format(http.TimeFormat))
 	file, err := os.Open(fpath)
 	if err != nil {
 		log.Println("Failed to getIcon4:", err)
 		return err
 	}
 	defer file.Close()
-	http.ServeContent(w, c.Request(), fpath, time.Time{}, file)
+	http.ServeContent(w, c.Request(), fpath, ifms, file)
 	return nil
 }
 
