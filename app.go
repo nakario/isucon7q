@@ -570,7 +570,11 @@ func queryChannels(txn newrelic.Transaction) ([]int64, error) {
 }
 
 func queryHaveRead(txn newrelic.Transaction, userID, chID int64) (int64, error) {
-	return rd.Get(keyHaveread(userID, chID)).Int64()
+	id, err := rd.Get(keyHaveread(userID, chID)).Int64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	return id, err
 }
 
 func fetchUnread(c echo.Context) error {
