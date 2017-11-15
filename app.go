@@ -23,6 +23,7 @@ import (
 	"github.com/labstack/echo"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/middleware"
+	"github.com/newrelic/go-agent"
 )
 
 const (
@@ -32,6 +33,7 @@ const (
 var (
 	db            *sqlx.DB
 	ErrBadReqeust = echo.NewHTTPError(http.StatusBadRequest)
+	app newrelic.Application
 )
 
 type Renderer struct {
@@ -130,6 +132,8 @@ func queryMessages(chanID, lastID int64) ([]Message, error) {
 }
 
 func sessUserID(c echo.Context) int64 {
+	txn := app.StartTransaction("sessUserID", c.Response().Writer, c.Request())
+	defer txn.End()
 	sess, _ := session.Get("session", c)
 	var userID int64
 	if x, ok := sess.Values["user_id"]; ok {
@@ -139,6 +143,8 @@ func sessUserID(c echo.Context) int64 {
 }
 
 func sessSetUserID(c echo.Context, id int64) {
+	txn := app.StartTransaction("sessSetUserID", c.Response().Writer, c.Request())
+	defer txn.End()
 	sess, _ := session.Get("session", c)
 	sess.Options = &sessions.Options{
 		HttpOnly: true,
@@ -149,6 +155,8 @@ func sessSetUserID(c echo.Context, id int64) {
 }
 
 func ensureLogin(c echo.Context) (*User, error) {
+	txn := app.StartTransaction("ensureLogin", c.Response().Writer, c.Request())
+	defer txn.End()
 	var user *User
 	var err error
 
@@ -203,6 +211,8 @@ func register(name, password string) (int64, error) {
 // request handlers
 
 func getInitialize(c echo.Context) error {
+	txn := app.StartTransaction("getInitialize", c.Response().Writer, c.Request())
+	defer txn.End()
 	db.MustExec("DELETE FROM user WHERE id > 1000")
 	db.MustExec("DELETE FROM image WHERE id > 1001")
 	db.MustExec("DELETE FROM channel WHERE id > 10")
@@ -212,6 +222,8 @@ func getInitialize(c echo.Context) error {
 }
 
 func getIndex(c echo.Context) error {
+	txn := app.StartTransaction("getIndex", c.Response().Writer, c.Request())
+	defer txn.End()
 	userID := sessUserID(c)
 	if userID != 0 {
 		return c.Redirect(http.StatusSeeOther, "/channel/1")
@@ -231,6 +243,8 @@ type ChannelInfo struct {
 }
 
 func getChannel(c echo.Context) error {
+	txn := app.StartTransaction("getChannel", c.Response().Writer, c.Request())
+	defer txn.End()
 	user, err := ensureLogin(c)
 	if user == nil {
 		return err
@@ -261,6 +275,8 @@ func getChannel(c echo.Context) error {
 }
 
 func getRegister(c echo.Context) error {
+	txn := app.StartTransaction("getRegister", c.Response().Writer, c.Request())
+	defer txn.End()
 	return c.Render(http.StatusOK, "register", map[string]interface{}{
 		"ChannelID": 0,
 		"Channels":  []ChannelInfo{},
@@ -269,6 +285,8 @@ func getRegister(c echo.Context) error {
 }
 
 func postRegister(c echo.Context) error {
+	txn := app.StartTransaction("postRegister", c.Response().Writer, c.Request())
+	defer txn.End()
 	name := c.FormValue("name")
 	pw := c.FormValue("password")
 	if name == "" || pw == "" {
@@ -288,6 +306,8 @@ func postRegister(c echo.Context) error {
 }
 
 func getLogin(c echo.Context) error {
+	txn := app.StartTransaction("getLogin", c.Response().Writer, c.Request())
+	defer txn.End()
 	return c.Render(http.StatusOK, "login", map[string]interface{}{
 		"ChannelID": 0,
 		"Channels":  []ChannelInfo{},
@@ -296,6 +316,8 @@ func getLogin(c echo.Context) error {
 }
 
 func postLogin(c echo.Context) error {
+	txn := app.StartTransaction("postLogin", c.Response().Writer, c.Request())
+	defer txn.End()
 	name := c.FormValue("name")
 	pw := c.FormValue("password")
 	if name == "" || pw == "" {
@@ -319,6 +341,8 @@ func postLogin(c echo.Context) error {
 }
 
 func getLogout(c echo.Context) error {
+	txn := app.StartTransaction("getLogout", c.Response().Writer, c.Request())
+	defer txn.End()
 	sess, _ := session.Get("session", c)
 	delete(sess.Values, "user_id")
 	sess.Save(c.Request(), c.Response())
@@ -326,6 +350,8 @@ func getLogout(c echo.Context) error {
 }
 
 func postMessage(c echo.Context) error {
+	txn := app.StartTransaction("postMessage", c.Response().Writer, c.Request())
+	defer txn.End()
 	user, err := ensureLogin(c)
 	if user == nil {
 		return err
@@ -367,6 +393,8 @@ func jsonifyMessage(m Message) (map[string]interface{}, error) {
 }
 
 func getMessage(c echo.Context) error {
+	txn := app.StartTransaction("getMessage", c.Response().Writer, c.Request())
+	defer txn.End()
 	userID := sessUserID(c)
 	if userID == 0 {
 		return c.NoContent(http.StatusForbidden)
@@ -437,6 +465,8 @@ func queryHaveRead(userID, chID int64) (int64, error) {
 }
 
 func fetchUnread(c echo.Context) error {
+	txn := app.StartTransaction("fetchUnread", c.Response().Writer, c.Request())
+	defer txn.End()
 	userID := sessUserID(c)
 	if userID == 0 {
 		return c.NoContent(http.StatusForbidden)
@@ -480,6 +510,8 @@ func fetchUnread(c echo.Context) error {
 }
 
 func getHistory(c echo.Context) error {
+	txn := app.StartTransaction("getHistory", c.Response().Writer, c.Request())
+	defer txn.End()
 	chID, err := strconv.ParseInt(c.Param("channel_id"), 10, 64)
 	if err != nil || chID <= 0 {
 		return ErrBadReqeust
@@ -549,6 +581,8 @@ func getHistory(c echo.Context) error {
 }
 
 func getProfile(c echo.Context) error {
+	txn := app.StartTransaction("getProfile", c.Response().Writer, c.Request())
+	defer txn.End()
 	self, err := ensureLogin(c)
 	if self == nil {
 		return err
@@ -580,6 +614,8 @@ func getProfile(c echo.Context) error {
 }
 
 func getAddChannel(c echo.Context) error {
+	txn := app.StartTransaction("getAddChannel", c.Response().Writer, c.Request())
+	defer txn.End()
 	self, err := ensureLogin(c)
 	if self == nil {
 		return err
@@ -599,6 +635,8 @@ func getAddChannel(c echo.Context) error {
 }
 
 func postAddChannel(c echo.Context) error {
+	txn := app.StartTransaction("postAddChannel", c.Response().Writer, c.Request())
+	defer txn.End()
 	self, err := ensureLogin(c)
 	if self == nil {
 		return err
@@ -622,6 +660,8 @@ func postAddChannel(c echo.Context) error {
 }
 
 func postProfile(c echo.Context) error {
+	txn := app.StartTransaction("postProfile", c.Response().Writer, c.Request())
+	defer txn.End()
 	self, err := ensureLogin(c)
 	if self == nil {
 		return err
@@ -683,6 +723,8 @@ func postProfile(c echo.Context) error {
 }
 
 func getIcon(c echo.Context) error {
+	txn := app.StartTransaction("getIcon", c.Response().Writer, c.Request())
+	defer txn.End()
 	var name string
 	var data []byte
 	err := db.QueryRow("SELECT name, data FROM image WHERE name = ?",
@@ -721,6 +763,13 @@ func tRange(a, b int64) []int64 {
 }
 
 func main() {
+	cfg := newrelic.NewConfig("Isubata", os.Getenv("NEW_RELIC_KEY"))
+	a, err := newrelic.NewApplication(cfg)
+	if err != nil {
+		log.Fatalln("Failed to connect to New Relic:", err)
+	}
+	app = a
+
 	e := echo.New()
 	funcs := template.FuncMap{
 		"add":    tAdd,
