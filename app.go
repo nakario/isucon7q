@@ -475,6 +475,11 @@ func queryResponse(txn newrelic.Transaction, chanID, oldLastID int64) (response 
 	rows.Close()
 	s.End()
 
+	l := len(response)
+	for i := 0; i < l / 2; i++ {
+		response[i], response[l-i-1] = response[l-i-1], response[i]
+	}
+
 	return
 }
 
