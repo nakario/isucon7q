@@ -686,13 +686,11 @@ func getHistory(c echo.Context) error {
 	}
 
 	const N = 20
-	var cnt int64
-	s := StartMySQLSegment(txn, "message", "SELECT")
-	err = db.Get(&cnt, "SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?", chID)
-	s.End()
-	if err != nil {
+	cnt, err := rd.Get(keyMessage(chID)).Int64()
+	if err == redis.Nil {
+		cnt = 0
+	} else if err != nil {
 		log.Println("Failed to getHistory1:", err)
-		return err
 	}
 	maxPage := int64(cnt+N-1) / N
 	if maxPage == 0 {
