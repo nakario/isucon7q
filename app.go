@@ -880,7 +880,7 @@ func postProfile(c echo.Context) error {
 		redirect := hosts[hash(avatarName) % len(hosts)]
 		if redirect != me {
 			url_ := c.Request().URL
-			toURL := url_.Scheme + "//" + url_.User.String() + redirect + "/" + c.Path()
+			toURL := url_.Scheme + "//" + redirect + "/" + c.Path()
 			log.Println("postProfile redirect to:", toURL)
 			c.Redirect(http.StatusTemporaryRedirect, toURL)
 		}
@@ -919,7 +919,7 @@ func getIcon(c echo.Context) error {
 	redirect := hosts[hash(fname) % len(hosts)]
 	if redirect != me {
 		url_ := c.Request().URL
-		toURL := url_.Scheme + "//" + url_.User.String() + redirect + "/" + c.Path()
+		toURL := url_.Scheme + "//" + redirect + "/" + c.Path()
 		log.Println("getIcon Redirect to:", toURL)
 		c.Redirect(http.StatusSeeOther, toURL)
 	}
