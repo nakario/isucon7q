@@ -27,6 +27,7 @@ import (
 	"github.com/newrelic/go-agent"
 	"github.com/go-redis/redis"
 	"net/url"
+	"bytes"
 )
 
 const (
@@ -889,8 +890,18 @@ func postProfile(c echo.Context) error {
 				log.Println("Failed to PostProfile2.5:", err)
 				return err
 			}
-			req.URL = url2
-			resp, err := http.DefaultClient.Do(req)
+			buffer, err := ioutil.ReadAll(req.Body)
+			if err != nil {
+				log.Println("Failed to PostProfile2.6:", err)
+				return err
+			}
+			newreq, err := http.NewRequest(req.Method, url2.String(), bytes.NewBuffer(buffer))
+			if err != nil {
+				log.Println("Failed to PostProfile2.65;", err)
+				return err
+			}
+			newreq.Header = req.Header
+			resp, err := http.DefaultClient.Do(newreq)
 			if err != nil {
 				log.Println("Failed to PostProfile2.7:", err)
 				return err
@@ -947,8 +958,18 @@ func getIcon(c echo.Context) error {
 			log.Println("Failed to getIcon0.5:", err)
 			return err
 		}
-		req.URL = url2
-		resp, err := http.DefaultClient.Do(req)
+		buffer, err := ioutil.ReadAll(req.Body)
+		if err != nil {
+			log.Println("Failed to getIcon0.6:", err)
+			return err
+		}
+		newreq, err := http.NewRequest(req.Method, url2.String(), bytes.NewBuffer(buffer))
+		if err != nil {
+			log.Println("Failed to getIcon0.65:", err)
+			return err
+		}
+		newreq.Header = req.Header
+		resp, err := http.DefaultClient.Do(newreq)
 		if err != nil {
 			log.Println("Failed to getIcon0.7:", err)
 			return err
