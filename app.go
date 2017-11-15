@@ -878,24 +878,7 @@ func postProfile(c echo.Context) error {
 	if avatarName != "" && len(avatarData) > 0 {
 		for _, host := range hosts {
 			toURL := "http://" + host + "/icons/" + avatarName
-			req := c.Request()
-			url2, err := url.Parse(toURL)
-			if err != nil {
-				log.Println("Failed to PostProfile2.5:", err)
-				return err
-			}
-			buffer, err := ioutil.ReadAll(req.Body)
-			if err != nil {
-				log.Println("Failed to PostProfile2.6:", err)
-				return err
-			}
-			newreq, err := http.NewRequest(req.Method, url2.String(), bytes.NewBuffer(buffer))
-			if err != nil {
-				log.Println("Failed to PostProfile2.65;", err)
-				return err
-			}
-			newreq.Header = req.Header
-			resp, err := http.DefaultClient.Do(newreq)
+			resp, err := http.PostForm(toURL, url.Values{"avatar_icon": []string{string(avatarData)}})
 			if err != nil {
 				log.Println("Failed to PostProfile2.7:", err)
 				return err
