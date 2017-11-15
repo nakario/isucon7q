@@ -40,6 +40,15 @@ type Renderer struct {
 	templates *template.Template
 }
 
+func StartMySQLSegment(txn newrelic.Transaction, collection, operation string) newrelic.DatastoreSegment {
+	return newrelic.DatastoreSegment{
+		StartTime: txn.StartSegmentNow(),
+		Product: newrelic.DatastoreMySQL,
+		Collection: collection,
+		Operation: operation,
+	}
+}
+
 func (r *Renderer) Render(w io.Writer, name string, data interface{}, c echo.Context) error {
 	return r.templates.ExecuteTemplate(w, name, data)
 }
@@ -95,9 +104,12 @@ type User struct {
 	CreatedAt   time.Time `json:"-" db:"created_at"`
 }
 
-func getUser(userID int64) (*User, error) {
+func getUser(txn newrelic.Transaction, userID int64) (*User, error) {
 	u := User{}
-	if err := db.Get(&u, "SELECT * FROM user WHERE id = ?", userID); err != nil {
+	s := StartMySQLSegment(txn, "user", "SELECT")
+	err := db.Get(&u, "SELECT * FROM user WHERE id = ?", userID)
+	s.End()
+	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -106,10 +118,12 @@ func getUser(userID int64) (*User, error) {
 	return &u, nil
 }
 
-func addMessage(channelID, userID int64, content string) (int64, error) {
+func addMessage(txn newrelic.Transaction, channelID, userID int64, content string) (int64, error) {
+	s := StartMySQLSegment(txn, "message", "INSERT")
 	res, err := db.Exec(
 		"INSERT INTO message (channel_id, user_id, content, created_at) VALUES (?, ?, ?, NOW())",
 		channelID, userID, content)
+	s.End()
 	if err != nil {
 		return 0, err
 	}
@@ -124,10 +138,12 @@ type Message struct {
 	CreatedAt time.Time `db:"created_at"`
 }
 
-func queryMessages(chanID, lastID int64) ([]Message, error) {
+func queryMessages(txn newrelic.Transaction, chanID, lastID int64) ([]Message, error) {
 	msgs := []Message{}
+	s := StartMySQLSegment(txn, "message", "SELECT")
 	err := db.Select(&msgs, "SELECT * FROM message WHERE id > ? AND channel_id = ? ORDER BY id DESC LIMIT 100",
 		lastID, chanID)
+	s.End()
 	return msgs, err
 }
 
@@ -165,7 +181,7 @@ func ensureLogin(c echo.Context) (*User, error) {
 		goto redirect
 	}
 
-	user, err = getUser(userID)
+	user, err = getUser(txn, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -194,14 +210,16 @@ func randomString(n int) string {
 	return string(b)
 }
 
-func register(name, password string) (int64, error) {
+func register(txn newrelic.Transaction, name, password string) (int64, error) {
 	salt := randomString(20)
 	digest := fmt.Sprintf("%x", sha1.Sum([]byte(salt+password)))
 
+	s := StartMySQLSegment(txn, "user", "INSERT")
 	res, err := db.Exec(
 		"INSERT INTO user (name, salt, password, display_name, avatar_icon, created_at)"+
 			" VALUES (?, ?, ?, ?, ?, NOW())",
 		name, salt, digest, name, "default.png")
+	s.End()
 	if err != nil {
 		return 0, err
 	}
@@ -254,7 +272,9 @@ func getChannel(c echo.Context) error {
 		return err
 	}
 	channels := []ChannelInfo{}
+	s := StartMySQLSegment(txn, "channel", "SELECT")
 	err = db.Select(&channels, "SELECT * FROM channel ORDER BY id")
+	s.End()
 	if err != nil {
 		return err
 	}
@@ -292,7 +312,7 @@ func postRegister(c echo.Context) error {
 	if name == "" || pw == "" {
 		return ErrBadReqeust
 	}
-	userID, err := register(name, pw)
+	userID, err := register(txn, name, pw)
 	if err != nil {
 		if merr, ok := err.(*mysql.MySQLError); ok {
 			if merr.Number == 1062 { // Duplicate entry xxxx for key zzzz
@@ -325,7 +345,9 @@ func postLogin(c echo.Context) error {
 	}
 
 	var user User
+	s := StartMySQLSegment(txn, "user", "SELECT")
 	err := db.Get(&user, "SELECT * FROM user WHERE name = ?", name)
+	s.End()
 	if err == sql.ErrNoRows {
 		return echo.ErrForbidden
 	} else if err != nil {
@@ -369,17 +391,19 @@ func postMessage(c echo.Context) error {
 		chanID = int64(x)
 	}
 
-	if _, err := addMessage(chanID, user.ID, message); err != nil {
+	if _, err := addMessage(txn, chanID, user.ID, message); err != nil {
 		return err
 	}
 
 	return c.NoContent(204)
 }
 
-func jsonifyMessage(m Message) (map[string]interface{}, error) {
+func jsonifyMessage(txn newrelic.Transaction, m Message) (map[string]interface{}, error) {
 	u := User{}
+	s := StartMySQLSegment(txn, "user", "SELECT")
 	err := db.Get(&u, "SELECT name, display_name, avatar_icon FROM user WHERE id = ?",
 		m.UserID)
+	s.End()
 	if err != nil {
 		return nil, err
 	}
@@ -409,7 +433,7 @@ func getMessage(c echo.Context) error {
 		return err
 	}
 
-	messages, err := queryMessages(chanID, lastID)
+	messages, err := queryMessages(txn, chanID, lastID)
 	if err != nil {
 		return err
 	}
@@ -417,7 +441,7 @@ func getMessage(c echo.Context) error {
 	response := make([]map[string]interface{}, 0)
 	for i := len(messages) - 1; i >= 0; i-- {
 		m := messages[i]
-		r, err := jsonifyMessage(m)
+		r, err := jsonifyMessage(txn, m)
 		if err != nil {
 			return err
 		}
@@ -425,10 +449,12 @@ func getMessage(c echo.Context) error {
 	}
 
 	if len(messages) > 0 {
+		s := StartMySQLSegment(txn, "haveread", "INSERT")
 		_, err := db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
 			" VALUES (?, ?, ?, NOW(), NOW())"+
 			" ON DUPLICATE KEY UPDATE message_id = ?, updated_at = NOW()",
 			userID, chanID, messages[0].ID, messages[0].ID)
+		s.End()
 		if err != nil {
 			return err
 		}
@@ -437,13 +463,15 @@ func getMessage(c echo.Context) error {
 	return c.JSON(http.StatusOK, response)
 }
 
-func queryChannels() ([]int64, error) {
+func queryChannels(txn newrelic.Transaction) ([]int64, error) {
 	res := []int64{}
+	s := StartMySQLSegment(txn, "channel", "SELECT")
 	err := db.Select(&res, "SELECT id FROM channel")
+	s.End()
 	return res, err
 }
 
-func queryHaveRead(userID, chID int64) (int64, error) {
+func queryHaveRead(txn newrelic.Transaction, userID, chID int64) (int64, error) {
 	type HaveRead struct {
 		UserID    int64     `db:"user_id"`
 		ChannelID int64     `db:"channel_id"`
@@ -453,8 +481,10 @@ func queryHaveRead(userID, chID int64) (int64, error) {
 	}
 	h := HaveRead{}
 
+	s := StartMySQLSegment(txn, "haveread", "SELECT")
 	err := db.Get(&h, "SELECT * FROM haveread WHERE user_id = ? AND channel_id = ?",
 		userID, chID)
+	s.End()
 
 	if err == sql.ErrNoRows {
 		return 0, nil
@@ -474,7 +504,7 @@ func fetchUnread(c echo.Context) error {
 
 	time.Sleep(time.Second)
 
-	channels, err := queryChannels()
+	channels, err := queryChannels(txn)
 	if err != nil {
 		return err
 	}
@@ -482,20 +512,24 @@ func fetchUnread(c echo.Context) error {
 	resp := []map[string]interface{}{}
 
 	for _, chID := range channels {
-		lastID, err := queryHaveRead(userID, chID)
+		lastID, err := queryHaveRead(txn, userID, chID)
 		if err != nil {
 			return err
 		}
 
 		var cnt int64
 		if lastID > 0 {
+			s := StartMySQLSegment(txn, "message", "SELECT")
 			err = db.Get(&cnt,
 				"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ? AND ? < id",
 				chID, lastID)
+			s.End()
 		} else {
+			s := StartMySQLSegment(txn, "message", "SELECT")
 			err = db.Get(&cnt,
 				"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
 				chID)
+			s.End()
 		}
 		if err != nil {
 			return err
@@ -535,7 +569,9 @@ func getHistory(c echo.Context) error {
 
 	const N = 20
 	var cnt int64
+	s := StartMySQLSegment(txn, "message", "SELECT")
 	err = db.Get(&cnt, "SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?", chID)
+	s.End()
 	if err != nil {
 		return err
 	}
@@ -548,16 +584,18 @@ func getHistory(c echo.Context) error {
 	}
 
 	messages := []Message{}
+	s2 := StartMySQLSegment(txn, "message", "SELECT")
 	err = db.Select(&messages,
 		"SELECT * FROM message WHERE channel_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
 		chID, N, (page-1)*N)
+	s2.End()
 	if err != nil {
 		return err
 	}
 
 	mjson := make([]map[string]interface{}, 0)
 	for i := len(messages) - 1; i >= 0; i-- {
-		r, err := jsonifyMessage(messages[i])
+		r, err := jsonifyMessage(txn, messages[i])
 		if err != nil {
 			return err
 		}
@@ -565,7 +603,9 @@ func getHistory(c echo.Context) error {
 	}
 
 	channels := []ChannelInfo{}
+	s3 := StartMySQLSegment(txn, "channel", "SELECT")
 	err = db.Select(&channels, "SELECT * FROM channel ORDER BY id")
+	s3.End()
 	if err != nil {
 		return err
 	}
@@ -589,14 +629,18 @@ func getProfile(c echo.Context) error {
 	}
 
 	channels := []ChannelInfo{}
+	s1 := StartMySQLSegment(txn, "channel", "SELECT")
 	err = db.Select(&channels, "SELECT * FROM channel ORDER BY id")
+	s1.End()
 	if err != nil {
 		return err
 	}
 
 	userName := c.Param("user_name")
 	var other User
+	s2 := StartMySQLSegment(txn, "user", "SELECT")
 	err = db.Get(&other, "SELECT * FROM user WHERE name = ?", userName)
+	s2.End()
 	if err == sql.ErrNoRows {
 		return echo.ErrNotFound
 	}
@@ -622,7 +666,9 @@ func getAddChannel(c echo.Context) error {
 	}
 
 	channels := []ChannelInfo{}
+	s := StartMySQLSegment(txn, "channel", "SELECT")
 	err = db.Select(&channels, "SELECT * FROM channel ORDER BY id")
+	s.End()
 	if err != nil {
 		return err
 	}
@@ -648,9 +694,11 @@ func postAddChannel(c echo.Context) error {
 		return ErrBadReqeust
 	}
 
+	s := StartMySQLSegment(txn, "channel", "INSERT")
 	res, err := db.Exec(
 		"INSERT INTO channel (name, description, updated_at, created_at) VALUES (?, ?, NOW(), NOW())",
 		name, desc)
+	s.End()
 	if err != nil {
 		return err
 	}
@@ -702,18 +750,24 @@ func postProfile(c echo.Context) error {
 	}
 
 	if avatarName != "" && len(avatarData) > 0 {
+		s1 := StartMySQLSegment(txn, "image", "INSERT")
 		_, err := db.Exec("INSERT INTO image (name, data) VALUES (?, ?)", avatarName, avatarData)
+		s1.End()
 		if err != nil {
 			return err
 		}
+		s2 := StartMySQLSegment(txn, "user", "UPDATE")
 		_, err = db.Exec("UPDATE user SET avatar_icon = ? WHERE id = ?", avatarName, self.ID)
+		s2.End()
 		if err != nil {
 			return err
 		}
 	}
 
 	if name := c.FormValue("display_name"); name != "" {
+		s := StartMySQLSegment(txn, "user", "UPDATE")
 		_, err := db.Exec("UPDATE user SET display_name = ? WHERE id = ?", name, self.ID)
+		s.End()
 		if err != nil {
 			return err
 		}
@@ -727,8 +781,10 @@ func getIcon(c echo.Context) error {
 	defer txn.End()
 	var name string
 	var data []byte
+	s := StartMySQLSegment(txn, "image", "SELECT")
 	err := db.QueryRow("SELECT name, data FROM image WHERE name = ?",
 		c.Param("file_name")).Scan(&name, &data)
+	s.End()
 	if err == sql.ErrNoRows {
 		return echo.ErrNotFound
 	}
