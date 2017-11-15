@@ -921,7 +921,7 @@ func getIcon(c echo.Context) error {
 		url_ := c.Request().URL
 		toURL := url_.Scheme + "//" + redirect + "/" + c.Path()
 		log.Println("getIcon Redirect to:", toURL)
-		c.Redirect(http.StatusSeeOther, toURL)
+		c.Redirect(http.StatusTemporaryRedirect, toURL)
 	}
 	if _, err := os.Stat(fpath); os.IsNotExist(err) {
 		var name string
