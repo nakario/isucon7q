@@ -645,7 +645,9 @@ func fetchUnread(c echo.Context) error {
 		}
 
 		max, err := rd.Get(keyMessage(chID)).Int64()
-		if err != nil {
+		if err == redis.Nil {
+			max = 0
+		} else if err != nil {
 			log.Println("Failed to fetchUnread2.5:", err)
 		}
 
