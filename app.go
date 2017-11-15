@@ -308,29 +308,24 @@ func register(txn newrelic.Transaction, name, password string) (int64, error) {
 func getInitialize(c echo.Context) error {
 	txn := app.StartTransaction("getInitialize", c.Response().Writer, c.Request())
 	defer txn.End()
-	after := time.After(4 * time.Second)
-	rd_host := os.Getenv("ISUBATA_REDIS_HOST")
-	if rd_host == me || rd_host == "localhost" || rd_host == "127.0.0.1" {
-		db.MustExec("DELETE FROM user WHERE id > 1000")
-		db.MustExec("DELETE FROM image WHERE id > 1001")
-		rd.FlushDB().Err()
-		db.MustExec("DELETE FROM channel WHERE id > 10")
-		db.MustExec("DELETE FROM message WHERE id > 10000")
-		var msgs []Message
-		err := db.Select(&msgs, "SELECT * FROM message")
+	after := time.After(8 * time.Second)
+	db.MustExec("DELETE FROM user WHERE id > 1000")
+	db.MustExec("DELETE FROM image WHERE id > 1001")
+	db.MustExec("DELETE FROM channel WHERE id > 10")
+	db.MustExec("DELETE FROM message WHERE id > 10000")
+	rd.FlushDB().Err()
+	var msgs []Message
+	err := db.Select(&msgs, "SELECT * FROM message")
+	if err != nil {
+		log.Println("Failed to getInitialize:", err)
+		return err
+	}
+	for _, mes := range msgs {
+		err := rd.LPush(keyMessages(mes.ChannelID), unifyMessage(mes.ID, mes.UserID, mes.Content, mes.CreatedAt)).Err()
 		if err != nil {
-			log.Println("Failed to getInitialize:", err)
-			return err
-		}
-		for _, mes := range msgs {
-			err := rd.LPush(keyMessages(mes.ChannelID), unifyMessage(mes.ID, mes.UserID, mes.Content, mes.CreatedAt)).Err()
-			if err != nil {
-				log.Println("Failed to getInitialize1.5:", err)
-			}
+			log.Println("Failed to getInitialize1.5:", err)
 		}
 	}
-	<-after
-	after = time.After(4 * time.Second)
 	os.RemoveAll(iconsDir)
 	os.Mkdir(iconsDir, 0777)
 	rows, err := db.Query("SELECT name, data FROM image")
