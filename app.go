@@ -66,7 +66,7 @@ func (r *Renderer) Render(w io.Writer, name string, data interface{}, c echo.Con
 }
 
 func init() {
-	me = os.Getenv(os.Getenv("ISUBATA_ME"))
+	me = os.Getenv("ISUBATA_ME")
 	fmt.Println("ME:", me)
 	hosts = strings.Split(os.Getenv("ISUBATA_HOSTS"), ",")
 	fmt.Println("HOSTS:", hosts)
