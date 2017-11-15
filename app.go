@@ -446,8 +446,8 @@ func queryResponse(txn newrelic.Transaction, chanID, oldLastID int64) (response 
 	response = make([]map[string]interface{}, 0, 100)
 	s := StartMySQLSegment(txn, "message", "SELECT")
 	rows, err := db.Query("SELECT m.id, m.created_at, m.content, u.name, u.display_name, u.avatar_icon " +
-		"FROM message AS m WHERE m.id > ? AND m.channel_id = ? ORDER BY m.id DESC LIMIT 100 " +
-		"INNER JOIN user AS u ON m.user_id = u.id", oldLastID, chanID)
+		"FROM message AS m INNER JOIN user AS u ON m.user_id = u.id " +
+		"WHERE m.id > ? AND m.channel_id = ? ORDER BY m.id DESC LIMIT 100", oldLastID, chanID)
 	if err != nil {
 		s.End()
 		return nil, 0, err
