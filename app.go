@@ -256,6 +256,7 @@ func getInitialize(c echo.Context) error {
 				return
 			}
 		}
+		rows.Close()
 		log.Println("Finished preloading images.")
 	}()
 	db.MustExec("DELETE FROM channel WHERE id > 10")
