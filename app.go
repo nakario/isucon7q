@@ -146,6 +146,7 @@ func getUser(txn newrelic.Transaction, userID int64) (*User, error) {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
+		log.Println("Failed to get user:", err)
 		return nil, err
 	}
 	return &u, nil
@@ -158,6 +159,7 @@ func addMessage(txn newrelic.Transaction, channelID, userID int64, content strin
 		channelID, userID, content)
 	s.End()
 	if err != nil {
+		log.Println("Failed to insert into message:", err)
 		return 0, err
 	}
 	return res.LastInsertId()
@@ -216,6 +218,7 @@ func ensureLogin(c echo.Context) (*User, error) {
 
 	user, err = getUser(txn, userID)
 	if err != nil {
+		log.Println("Failed to getUser():", err)
 		return nil, err
 	}
 	if user == nil {
@@ -254,6 +257,7 @@ func register(txn newrelic.Transaction, name, password string) (int64, error) {
 		name, salt, digest, name, "default.png")
 	s.End()
 	if err != nil {
+		log.Println("Failed to register:", err)
 		return 0, err
 	}
 	return res.LastInsertId()
@@ -329,6 +333,7 @@ func getChannel(c echo.Context) error {
 	}
 	cID, err := strconv.Atoi(c.Param("channel_id"))
 	if err != nil {
+		log.Println("Failed to getChannel:", err)
 		return err
 	}
 	channels := []ChannelInfo{}
@@ -336,6 +341,7 @@ func getChannel(c echo.Context) error {
 	err = db.Select(&channels, "SELECT * FROM channel ORDER BY id")
 	s.End()
 	if err != nil {
+		log.Println("Failed to getChannel:", err)
 		return err
 	}
 
@@ -379,6 +385,7 @@ func postRegister(c echo.Context) error {
 				return c.NoContent(http.StatusConflict)
 			}
 		}
+		log.Println("Failed to postRegister:", err)
 		return err
 	}
 	sessSetUserID(c, userID)
@@ -411,6 +418,7 @@ func postLogin(c echo.Context) error {
 	if err == sql.ErrNoRows {
 		return echo.ErrForbidden
 	} else if err != nil {
+		log.Println("Failed to postLogin:", err)
 		return err
 	}
 
@@ -452,6 +460,7 @@ func postMessage(c echo.Context) error {
 	}
 
 	if _, err := addMessage(txn, chanID, user.ID, message); err != nil {
+		log.Println("Failed to postMessage:", err)
 		return err
 	}
 
@@ -465,6 +474,7 @@ func jsonifyMessage(txn newrelic.Transaction, m Message) (map[string]interface{}
 		m.UserID)
 	s.End()
 	if err != nil {
+		log.Println("Failed to jsonifyMessage:", err)
 		return nil, err
 	}
 
@@ -485,6 +495,7 @@ func queryResponse(txn newrelic.Transaction, chanID, oldLastID int64) (response 
 	defer rows.Close()
 	if err != nil {
 		s.End()
+		log.Println("Failed to queryResponse:", err)
 		return nil, 0, err
 	}
 	first := true
@@ -494,6 +505,7 @@ func queryResponse(txn newrelic.Transaction, chanID, oldLastID int64) (response 
 		err := rows.Scan(&m.ID, &m.CreatedAt, &m.Content, &u.Name, &u.DisplayName, &u.AvatarIcon)
 		if err != nil {
 			s.End()
+			log.Println("Failed to queryResponse:", err)
 			return nil, 0, err
 		}
 		r := make(map[string]interface{})
@@ -527,10 +539,12 @@ func getMessage(c echo.Context) error {
 
 	chanID, err := strconv.ParseInt(c.QueryParam("channel_id"), 10, 64)
 	if err != nil {
+		log.Println("Failed to getMessage:", err)
 		return err
 	}
 	lastID, err := strconv.ParseInt(c.QueryParam("last_message_id"), 10, 64)
 	if err != nil {
+		log.Println("Failed to getMessage:", err)
 		return err
 	}
 
@@ -539,6 +553,7 @@ func getMessage(c echo.Context) error {
 	if len(response) > 0 {
 		err := rd.Set(keyHaveread(userID, chanID), newLastID, 0).Err()
 		if err != nil {
+			log.Println("Failed to getMessage:", err)
 			return err
 		}
 	}
@@ -570,6 +585,7 @@ func fetchUnread(c echo.Context) error {
 
 	channels, err := queryChannels(txn)
 	if err != nil {
+		log.Println("Failed to fetchUnread1:", err)
 		return err
 	}
 
@@ -578,6 +594,7 @@ func fetchUnread(c echo.Context) error {
 	for _, chID := range channels {
 		lastID, err := queryHaveRead(txn, userID, chID)
 		if err != nil {
+			log.Println("Failed to fetchUnread2:", err)
 			return err
 		}
 
@@ -596,6 +613,7 @@ func fetchUnread(c echo.Context) error {
 			s.End()
 		}
 		if err != nil {
+			log.Println("Failed to fetchUnread3:", err)
 			return err
 		}
 		r := map[string]interface{}{
@@ -637,6 +655,7 @@ func getHistory(c echo.Context) error {
 	err = db.Get(&cnt, "SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?", chID)
 	s.End()
 	if err != nil {
+		log.Println("Failed to getHistory1:", err)
 		return err
 	}
 	maxPage := int64(cnt+N-1) / N
@@ -654,6 +673,7 @@ func getHistory(c echo.Context) error {
 		chID, N, (page-1)*N)
 	s2.End()
 	if err != nil {
+		log.Println("Failed to getHistory2:", err)
 		return err
 	}
 
@@ -661,6 +681,7 @@ func getHistory(c echo.Context) error {
 	for i := len(messages) - 1; i >= 0; i-- {
 		r, err := jsonifyMessage(txn, messages[i])
 		if err != nil {
+			log.Println("Failed to getHistory3:", err)
 			return err
 		}
 		mjson = append(mjson, r)
@@ -671,6 +692,7 @@ func getHistory(c echo.Context) error {
 	err = db.Select(&channels, "SELECT * FROM channel ORDER BY id")
 	s3.End()
 	if err != nil {
+		log.Println("Failed to getHistory4:", err)
 		return err
 	}
 
@@ -697,6 +719,7 @@ func getProfile(c echo.Context) error {
 	err = db.Select(&channels, "SELECT * FROM channel ORDER BY id")
 	s1.End()
 	if err != nil {
+		log.Println("Failed to getProfile1:", err)
 		return err
 	}
 
@@ -709,6 +732,7 @@ func getProfile(c echo.Context) error {
 		return echo.ErrNotFound
 	}
 	if err != nil {
+		log.Println("Failed to getProfile2:", err)
 		return err
 	}
 
@@ -734,6 +758,7 @@ func getAddChannel(c echo.Context) error {
 	err = db.Select(&channels, "SELECT * FROM channel ORDER BY id")
 	s.End()
 	if err != nil {
+		log.Println("Failed to getAddChannel:", err)
 		return err
 	}
 
@@ -764,6 +789,7 @@ func postAddChannel(c echo.Context) error {
 		name, desc)
 	s.End()
 	if err != nil {
+		log.Println("Failed to postAddChannel:", err)
 		return err
 	}
 	lastID, _ := res.LastInsertId()
@@ -785,6 +811,7 @@ func postProfile(c echo.Context) error {
 	if fh, err := c.FormFile("avatar_icon"); err == http.ErrMissingFile {
 		// no file upload
 	} else if err != nil {
+		log.Println("Failed to postProfile1:", err)
 		return err
 	} else {
 		dotPos := strings.LastIndexByte(fh.Filename, '.')
@@ -801,6 +828,7 @@ func postProfile(c echo.Context) error {
 
 		file, err := fh.Open()
 		if err != nil {
+			log.Println("Failed to PostProfile2:", err)
 			return err
 		}
 		avatarData, _ = ioutil.ReadAll(file)
@@ -816,12 +844,14 @@ func postProfile(c echo.Context) error {
 	if avatarName != "" && len(avatarData) > 0 {
 		err := ioutil.WriteFile(iconsDir + "/" + avatarName, avatarData, 0777)
 		if err != nil {
+			log.Println("Failed to PostProfile3:", err)
 			return err
 		}
 		s2 := StartMySQLSegment(txn, "user", "UPDATE")
 		_, err = db.Exec("UPDATE user SET avatar_icon = ? WHERE id = ?", avatarName, self.ID)
 		s2.End()
 		if err != nil {
+			log.Println("Failed to PostProfile4:", err)
 			return err
 		}
 	}
@@ -831,6 +861,7 @@ func postProfile(c echo.Context) error {
 		_, err := db.Exec("UPDATE user SET display_name = ? WHERE id = ?", name, self.ID)
 		s.End()
 		if err != nil {
+			log.Println("Failed to PostProfile5:", err)
 			return err
 		}
 	}
@@ -853,6 +884,7 @@ func getIcon(c echo.Context) error {
 			return echo.ErrNotFound
 		}
 		if err != nil {
+			log.Println("Failed to getIcon1:", err)
 			return err
 		}
 
@@ -869,10 +901,12 @@ func getIcon(c echo.Context) error {
 		}
 		return c.Blob(http.StatusOK, mime, data)
 	} else if err != nil {
+		log.Println("Failed to getIcon2:", err)
 		return err
 	}
 	data, err := ioutil.ReadFile(fname)
 	if err != nil {
+		log.Println("Failed to getIcon3:", err)
 		return err
 	}
 	etag := sha1.Sum(data)
@@ -880,6 +914,7 @@ func getIcon(c echo.Context) error {
 	w.Header().Set("ETag", strconv.Quote(string(etag[:])))
 	file, err := os.Open(fname)
 	if err != nil {
+		log.Println("Failed to getIcon4:", err)
 		return err
 	}
 	defer file.Close()
