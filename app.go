@@ -137,6 +137,10 @@ func keyHaveread(user, ch int64) string {
 	return fmt.Sprintf("haveread:%d:%d", user, ch)
 }
 
+func keyMessage(ch int64) string {
+	return fmt.Sprintf("message:%d", ch)
+}
+
 func getUser(txn newrelic.Transaction, userID int64) (*User, error) {
 	u := User{}
 	s := StartMySQLSegment(txn, "user", "SELECT")
@@ -159,7 +163,12 @@ func addMessage(txn newrelic.Transaction, channelID, userID int64, content strin
 		channelID, userID, content)
 	s.End()
 	if err != nil {
-		log.Println("Failed to insert into message:", err)
+		log.Println("Failed to addMessage1:", err)
+		return 0, err
+	}
+	err = rd.Incr(keyMessage(channelID)).Err()
+	if err != nil {
+		log.Println("Failed to addMessage2:", err)
 		return 0, err
 	}
 	return res.LastInsertId()
@@ -296,9 +305,26 @@ func getInitialize(c echo.Context) error {
 		rows.Close()
 		log.Println("Finished preloading images.")
 	}()
+	rd.FlushDB().Err()
 	db.MustExec("DELETE FROM channel WHERE id > 10")
 	db.MustExec("DELETE FROM message WHERE id > 10000")
-	rd.FlushDB().Err()
+	var ch_ids []int64
+	err := db.Select(&ch_ids, "SELECT channel_id FROM message")
+	if err != nil {
+		log.Println("Failed to getInitialize:", err)
+		return err
+	}
+	mes_per_ch := make(map[int64]int64)
+	for _, ch_id := range ch_ids {
+		mes_per_ch[ch_id] += 1
+	}
+	for ch_id, count := range mes_per_ch {
+		err := rd.IncrBy(keyMessage(ch_id), count).Err()
+		if err != nil {
+			log.Println("Failed to getInitialize2:", err)
+			return err
+		}
+	}
 	<-after
 	return c.String(204, "")
 }
@@ -486,7 +512,7 @@ func jsonifyMessage(txn newrelic.Transaction, m Message) (map[string]interface{}
 	return r, nil
 }
 
-func queryResponse(txn newrelic.Transaction, chanID, oldLastID int64) (response []map[string]interface{}, newLastID int64, err error) {
+func queryResponse(txn newrelic.Transaction, chanID, oldLastID int64) (response []map[string]interface{}, read int64, err error) {
 	response = make([]map[string]interface{}, 0, 100)
 	s := StartMySQLSegment(txn, "message", "SELECT")
 	rows, err := db.Query("SELECT m.id, m.created_at, m.content, u.name, u.display_name, u.avatar_icon " +
@@ -498,7 +524,6 @@ func queryResponse(txn newrelic.Transaction, chanID, oldLastID int64) (response 
 		log.Println("Failed to queryResponse:", err)
 		return nil, 0, err
 	}
-	first := true
 	for rows.Next() {
 		var m Message
 		var u User
@@ -514,12 +539,14 @@ func queryResponse(txn newrelic.Transaction, chanID, oldLastID int64) (response 
 		r["date"] = m.CreatedAt.Format("2006/01/02 15:04:05")
 		r["content"] = m.Content
 		response = append(response, r)
-		if first {
-			newLastID = m.ID
-			first = false
-		}
 	}
 	s.End()
+
+	read, err = rd.Get(keyMessage(chanID)).Int64()
+	if err != nil {
+		log.Println("Failed to queryResponse2:", err)
+		return
+	}
 
 	l := len(response)
 	for i := 0; i < l / 2; i++ {
@@ -548,10 +575,10 @@ func getMessage(c echo.Context) error {
 		return err
 	}
 
-	response, newLastID, err := queryResponse(txn, chanID, lastID)
+	response, read, err := queryResponse(txn, chanID, lastID)
 
 	if len(response) > 0 {
-		err := rd.Set(keyHaveread(userID, chanID), newLastID, 0).Err()
+		err := rd.Set(keyHaveread(userID, chanID), read, 0).Err()
 		if err != nil {
 			log.Println("Failed to getMessage:", err)
 			return err
@@ -596,30 +623,18 @@ func fetchUnread(c echo.Context) error {
 	resp := []map[string]interface{}{}
 
 	for _, chID := range channels {
-		lastID, err := queryHaveRead(txn, userID, chID)
+		read, err := queryHaveRead(txn, userID, chID)
 		if err != nil {
 			log.Println("Failed to fetchUnread2:", err)
 			return err
 		}
 
-		var cnt int64
-		if lastID > 0 {
-			s := StartMySQLSegment(txn, "message", "SELECT")
-			err = db.Get(&cnt,
-				"SELECT COUNT(1) as cnt FROM message WHERE channel_id = ? AND ? < id",
-				chID, lastID)
-			s.End()
-		} else {
-			s := StartMySQLSegment(txn, "message", "SELECT")
-			err = db.Get(&cnt,
-				"SELECT COUNT(1) as cnt FROM message WHERE channel_id = ?",
-				chID)
-			s.End()
-		}
+		max, err := rd.Get(keyMessage(chID)).Int64()
 		if err != nil {
-			log.Println("Failed to fetchUnread3:", err)
-			return err
+			log.Println("Failed to fetchUnread2.5:", err)
 		}
+
+		cnt := max - read
 		r := map[string]interface{}{
 			"channel_id": chID,
 			"unread":     cnt}
