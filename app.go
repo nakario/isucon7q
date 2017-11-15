@@ -442,6 +442,42 @@ func jsonifyMessage(txn newrelic.Transaction, m Message) (map[string]interface{}
 	return r, nil
 }
 
+func queryResponse(txn newrelic.Transaction, chanID, oldLastID int64) (response []map[string]interface{}, newLastID int64, err error) {
+	response = make([]map[string]interface{}, 0, 100)
+	s := StartMySQLSegment(txn, "message", "SELECT")
+	rows, err := db.Query("SELECT m.id, m.created_at, m.content, u.name, u.display_name, u.avatar_icon " +
+		"FROM message AS m WHERE m.id > ? AND m.channel_id = ? ORDER BY m.id DESC LIMIT 100 " +
+		"INNER JOIN user AS u ON m.user_id = u.id", oldLastID, chanID)
+	if err != nil {
+		s.End()
+		return nil, 0, err
+	}
+	first := true
+	for rows.Next() {
+		var m Message
+		var u User
+		err := rows.Scan(&m.ID, &m.CreatedAt, &m.Content, &u.Name, &u.DisplayName, &u.AvatarIcon)
+		if err != nil {
+			s.End()
+			return nil, 0, err
+		}
+		r := make(map[string]interface{})
+		r["id"] = m.ID
+		r["user"] = u
+		r["date"] = m.CreatedAt.Format("2006/01/02 15:04:05")
+		r["content"] = m.Content
+		response = append(response, r)
+		if first {
+			newLastID = m.ID
+			first = false
+		}
+	}
+	rows.Close()
+	s.End()
+
+	return
+}
+
 func getMessage(c echo.Context) error {
 	txn := app.StartTransaction("getMessage", c.Response().Writer, c.Request())
 	defer txn.End()
@@ -459,27 +495,14 @@ func getMessage(c echo.Context) error {
 		return err
 	}
 
-	messages, err := queryMessages(txn, chanID, lastID)
-	if err != nil {
-		return err
-	}
+	response, newLastID, err := queryResponse(txn, chanID, lastID)
 
-	response := make([]map[string]interface{}, 0)
-	for i := len(messages) - 1; i >= 0; i-- {
-		m := messages[i]
-		r, err := jsonifyMessage(txn, m)
-		if err != nil {
-			return err
-		}
-		response = append(response, r)
-	}
-
-	if len(messages) > 0 {
+	if len(response) > 0 {
 		s := StartMySQLSegment(txn, "haveread", "INSERT")
 		_, err := db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
 			" VALUES (?, ?, ?, NOW(), NOW())"+
 			" ON DUPLICATE KEY UPDATE message_id = ?, updated_at = NOW()",
-			userID, chanID, messages[0].ID, messages[0].ID)
+			userID, chanID, newLastID, newLastID)
 		s.End()
 		if err != nil {
 			return err
