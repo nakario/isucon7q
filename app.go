@@ -152,8 +152,28 @@ func keyHaveread(user, ch int64) string {
 	return fmt.Sprintf("haveread:%d:%d", user, ch)
 }
 
-func keyMessage(ch int64) string {
-	return fmt.Sprintf("message:%d", ch)
+func keyMessages(ch int64) string {
+	return fmt.Sprintf("messages:%d", ch)
+}
+
+func unifyMessage(id, userID int64, content string, createdAt time.Time) string {
+	return fmt.Sprintf("%d@%d@%s@%s", id, userID, createdAt.Format("2006/01/02 15:04:05"), content)
+}
+
+func splitMessage(unified string) (ID, userID int64, content string, createdAt string) {
+	split := strings.SplitN(unified, "@", 4)
+	id, err := strconv.Atoi(split[0])
+	if err != nil {
+		panic(err)
+	}
+	ID = int64(id)
+	uid, err := strconv.Atoi(split[1])
+	if err != nil {
+		panic(err)
+	}
+	userID = int64(uid)
+	createdAt, content = split[2], split[3]
+	return
 }
 
 func getUser(txn newrelic.Transaction, userID int64) (*User, error) {
@@ -171,7 +191,7 @@ func getUser(txn newrelic.Transaction, userID int64) (*User, error) {
 	return &u, nil
 }
 
-func addMessage(txn newrelic.Transaction, channelID, userID int64, content string) (int64, error) {
+func addMessage(txn newrelic.Transaction, channelID, userID int64, content string) error {
 	s := StartMySQLSegment(txn, "message", "INSERT")
 	res, err := db.Exec(
 		"INSERT INTO message (channel_id, user_id, content, created_at) VALUES (?, ?, ?, NOW())",
@@ -179,14 +199,19 @@ func addMessage(txn newrelic.Transaction, channelID, userID int64, content strin
 	s.End()
 	if err != nil {
 		log.Println("Failed to addMessage1:", err)
-		return 0, err
+		return err
 	}
-	err = rd.Incr(keyMessage(channelID)).Err()
+	id, err := res.LastInsertId()
 	if err != nil {
 		log.Println("Failed to addMessage2:", err)
-		return 0, err
+		return err
 	}
-	return res.LastInsertId()
+	err = rd.LPush(keyMessages(channelID), unifyMessage(id, userID, content, time.Now())).Err()
+	if err != nil {
+		log.Println("Failed to addMessage4:", err)
+		return err
+	}
+	return nil
 }
 
 type Message struct {
@@ -195,15 +220,6 @@ type Message struct {
 	UserID    int64     `db:"user_id"`
 	Content   string    `db:"content"`
 	CreatedAt time.Time `db:"created_at"`
-}
-
-func queryMessages(txn newrelic.Transaction, chanID, lastID int64) ([]Message, error) {
-	msgs := []Message{}
-	s := StartMySQLSegment(txn, "message", "SELECT")
-	err := db.Select(&msgs, "SELECT * FROM message WHERE id > ? AND channel_id = ? ORDER BY id DESC LIMIT 100",
-		lastID, chanID)
-	s.End()
-	return msgs, err
 }
 
 func sessUserID(c echo.Context) int64 {
@@ -292,54 +308,51 @@ func register(txn newrelic.Transaction, name, password string) (int64, error) {
 func getInitialize(c echo.Context) error {
 	txn := app.StartTransaction("getInitialize", c.Response().Writer, c.Request())
 	defer txn.End()
-	after := time.After(9 * time.Second)
-	db.MustExec("DELETE FROM user WHERE id > 1000")
-	db.MustExec("DELETE FROM image WHERE id > 1001")
+	after := time.After(4 * time.Second)
+	rd_host := os.Getenv("ISUBATA_REDIS_HOST")
+	if rd_host == me || rd_host == "localhost" || rd_host == "127.0.0.1" {
+		db.MustExec("DELETE FROM user WHERE id > 1000")
+		db.MustExec("DELETE FROM image WHERE id > 1001")
+		rd.FlushDB().Err()
+		db.MustExec("DELETE FROM channel WHERE id > 10")
+		db.MustExec("DELETE FROM message WHERE id > 10000")
+		var msgs []Message
+		err := db.Select(&msgs, "SELECT * FROM message")
+		if err != nil {
+			log.Println("Failed to getInitialize:", err)
+			return err
+		}
+		for _, mes := range msgs {
+			err := rd.LPush(keyMessages(mes.ChannelID), unifyMessage(mes.ID, mes.UserID, mes.Content, mes.CreatedAt)).Err()
+			if err != nil {
+				log.Println("Failed to getInitialize1.5:", err)
+			}
+		}
+	}
+	<-after
+	after = time.After(4 * time.Second)
 	os.RemoveAll(iconsDir)
 	os.Mkdir(iconsDir, 0777)
-	go func() {
-		rows, err := db.Query("SELECT name, data FROM image")
-		if err != nil {
-			log.Println("Failed to preload image:", err)
-			return
-		}
-		for rows.Next() {
-			var name string
-			var data []byte
-			err := rows.Scan(&name, &data)
-			if err != nil {
-				log.Println("Failed to scan data:", err)
-				return
-			}
-			err = ioutil.WriteFile(iconsDir + "/" + name, data, 0777)
-			if err != nil {
-				log.Println("Failed to write file:", err)
-				return
-			}
-		}
-		rows.Close()
-		log.Println("Finished preloading images.")
-	}()
-	rd.FlushDB().Err()
-	db.MustExec("DELETE FROM channel WHERE id > 10")
-	db.MustExec("DELETE FROM message WHERE id > 10000")
-	var ch_ids []int64
-	err := db.Select(&ch_ids, "SELECT channel_id FROM message")
+	rows, err := db.Query("SELECT name, data FROM image")
 	if err != nil {
-		log.Println("Failed to getInitialize:", err)
+		log.Println("Failed to preload image:", err)
 		return err
 	}
-	mes_per_ch := make(map[int64]int64)
-	for _, ch_id := range ch_ids {
-		mes_per_ch[ch_id] += 1
-	}
-	for ch_id, count := range mes_per_ch {
-		err := rd.IncrBy(keyMessage(ch_id), count).Err()
+	for rows.Next() {
+		var name string
+		var data []byte
+		err := rows.Scan(&name, &data)
 		if err != nil {
-			log.Println("Failed to getInitialize2:", err)
+			log.Println("Failed to scan data:", err)
+			return err
+		}
+		err = ioutil.WriteFile(iconsDir + "/" + name, data, 0777)
+		if err != nil {
+			log.Println("Failed to write file:", err)
 			return err
 		}
 	}
+	rows.Close()
 	<-after
 	return c.String(204, "")
 }
@@ -500,7 +513,7 @@ func postMessage(c echo.Context) error {
 		chanID = int64(x)
 	}
 
-	if _, err := addMessage(txn, chanID, user.ID, message); err != nil {
+	if err := addMessage(txn, chanID, user.ID, message); err != nil {
 		log.Println("Failed to postMessage:", err)
 		return err
 	}
@@ -508,11 +521,11 @@ func postMessage(c echo.Context) error {
 	return c.NoContent(204)
 }
 
-func jsonifyMessage(txn newrelic.Transaction, m Message) (map[string]interface{}, error) {
+func jsonifyMessage(txn newrelic.Transaction, m_id, m_uid int64, m_con, m_at string) (map[string]interface{}, error) {
 	u := User{}
 	s := StartMySQLSegment(txn, "user", "SELECT")
 	err := db.Get(&u, "SELECT name, display_name, avatar_icon FROM user WHERE id = ?",
-		m.UserID)
+		m_uid)
 	s.End()
 	if err != nil {
 		log.Println("Failed to jsonifyMessage:", err)
@@ -520,10 +533,10 @@ func jsonifyMessage(txn newrelic.Transaction, m Message) (map[string]interface{}
 	}
 
 	r := make(map[string]interface{})
-	r["id"] = m.ID
+	r["id"] = m_id
 	r["user"] = u
-	r["date"] = m.CreatedAt.Format("2006/01/02 15:04:05")
-	r["content"] = m.Content
+	r["date"] = m_at
+	r["content"] = m_con
 	return r, nil
 }
 
@@ -557,7 +570,7 @@ func queryResponse(txn newrelic.Transaction, chanID, oldLastID int64) (response 
 	}
 	s.End()
 
-	read, err = rd.Get(keyMessage(chanID)).Int64()
+	read, err = rd.LLen(keyMessages(chanID)).Result()
 	if err != nil {
 		log.Println("Failed to queryResponse2:", err)
 		return
@@ -644,7 +657,7 @@ func fetchUnread(c echo.Context) error {
 			return err
 		}
 
-		max, err := rd.Get(keyMessage(chID)).Int64()
+		max, err := rd.LLen(keyMessages(chID)).Result()
 		if err == redis.Nil {
 			max = 0
 		} else if err != nil {
@@ -686,7 +699,7 @@ func getHistory(c echo.Context) error {
 	}
 
 	const N = 20
-	cnt, err := rd.Get(keyMessage(chID)).Int64()
+	cnt, err := rd.LLen(keyMessages(chID)).Result()
 	if err == redis.Nil {
 		cnt = 0
 	} else if err != nil {
@@ -706,14 +719,16 @@ func getHistory(c echo.Context) error {
 		"SELECT * FROM message WHERE channel_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
 		chID, N, (page-1)*N)
 	s2.End()
+	unifieds, err := rd.LRange(keyMessages(chID), (page - 1) * N, page * N - 1).Result()
 	if err != nil {
 		log.Println("Failed to getHistory2:", err)
 		return err
 	}
 
 	mjson := make([]map[string]interface{}, 0)
-	for i := len(messages) - 1; i >= 0; i-- {
-		r, err := jsonifyMessage(txn, messages[i])
+	for i := len(unifieds) - 1; i >= 0; i-- {
+		id, uid, content, at := splitMessage(unifieds[i])
+		r, err := jsonifyMessage(txn, id, uid, content, at)
 		if err != nil {
 			log.Println("Failed to getHistory3:", err)
 			return err
