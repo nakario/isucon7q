@@ -17,7 +17,8 @@ import (
 	"strings"
 	"time"
 	"hash/fnv"
-	"net/url"
+	"bytes"
+	"mime/multipart"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
@@ -877,7 +878,26 @@ func postProfile(c echo.Context) error {
 	if avatarName != "" && len(avatarData) > 0 {
 		for _, host := range hosts {
 			toURL := "http://" + host + "/icons/" + avatarName
-			resp, err := http.PostForm(toURL, url.Values{"avatar_icon": []string{string(avatarData)}})
+			body := &bytes.Buffer{}
+			writer := multipart.NewWriter(body)
+			part, err := writer.CreateFormFile("avatar_icon", avatarName)
+			if err != nil {
+				log.Println("Failed to PostProfile2.1:", err)
+				return err
+			}
+			_, err = io.Copy(part, bytes.NewReader(avatarData))
+			if err != nil {
+				log.Println("Failed to PostProfile2.2:", err)
+				return err
+			}
+			err = writer.Close()
+			if err != nil {
+				log.Println("Failed to PostProfile2.3:", err)
+				return err
+			}
+			req, err := http.NewRequest(http.MethodPost, toURL, body)
+			req.Header.Set("Content-Type", writer.FormDataContentType())
+			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				log.Println("Failed to PostProfile2.7:", err)
 				return err
