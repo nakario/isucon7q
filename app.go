@@ -965,9 +965,13 @@ func getIcon(c echo.Context) error {
 		log.Println("Failed to getIcon2:", err)
 		return err
 	}
-	etag := hash(fname)
+	etag := strconv.Quote(strconv.Itoa(hash(fname)))
+	if c.Request().Header.Get("If-None-Match") == etag {
+		c.String(http.StatusNotModified, "")
+		return nil
+	}
 	w := c.Response().Writer
-	w.Header().Set("ETag", strconv.Quote(strconv.Itoa(etag)))
+	w.Header().Set("ETag", etag)
 	file, err := os.Open(fpath)
 	if err != nil {
 		log.Println("Failed to getIcon4:", err)
