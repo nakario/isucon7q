@@ -606,13 +606,13 @@ func fetchUnread(c echo.Context) error {
 		if lastID > 0 {
 			s := StartMySQLSegment(txn, "message", "SELECT")
 			err = db.Get(&cnt,
-				"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ? AND ? < id",
+				"SELECT COUNT(1) as cnt FROM message WHERE channel_id = ? AND ? < id",
 				chID, lastID)
 			s.End()
 		} else {
 			s := StartMySQLSegment(txn, "message", "SELECT")
 			err = db.Get(&cnt,
-				"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
+				"SELECT COUNT(1) as cnt FROM message WHERE channel_id = ?",
 				chID)
 			s.End()
 		}
