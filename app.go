@@ -934,6 +934,7 @@ func getIcon(c echo.Context) error {
 	fname := c.Param("file_name")
 	fpath := iconsDir + "/" + fname
 	if _, err := os.Stat(fpath); os.IsNotExist(err) {
+		log.Println("UNEXPECTED load icon from mysql:", fname)
 		var name string
 		var data []byte
 		s := StartMySQLSegment(txn, "image", "SELECT")
