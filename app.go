@@ -972,6 +972,7 @@ func getIcon(c echo.Context) error {
 		return nil
 	}
 	w := c.Response().Writer
+	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.Header().Set("Last-Modified", ifms.Format(http.TimeFormat))
 	file, err := os.Open(fpath)
 	if err != nil {
