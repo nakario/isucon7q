@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"hash/fnv"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
@@ -37,10 +38,18 @@ var (
 	ErrBadReqeust = echo.NewHTTPError(http.StatusBadRequest)
 	app newrelic.Application
 	rd *redis.Client
+	me string
+	hosts []string
 )
 
 type Renderer struct {
 	templates *template.Template
+}
+
+func hash(s string) int {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return int(h.Sum32())
 }
 
 func StartMySQLSegment(txn newrelic.Transaction, collection, operation string) newrelic.DatastoreSegment {
@@ -57,6 +66,10 @@ func (r *Renderer) Render(w io.Writer, name string, data interface{}, c echo.Con
 }
 
 func init() {
+	me = os.Getenv(os.Getenv("ISUBATA_ME"))
+	fmt.Println("ME:", me)
+	hosts = strings.Split(os.Getenv("ISUBATA_HOSTS"), ",")
+	fmt.Println("HOSTS:", hosts)
 	seedBuf := make([]byte, 8)
 	crand.Read(seedBuf)
 	rand.Seed(int64(binary.LittleEndian.Uint64(seedBuf)))
@@ -295,6 +308,9 @@ func getInitialize(c echo.Context) error {
 			if err != nil {
 				log.Println("Failed to scan data:", err)
 				return
+			}
+			if hosts[hash(name) % len(hosts)] != me {
+				continue
 			}
 			err = ioutil.WriteFile(iconsDir + "/" + name, data, 0777)
 			if err != nil {
@@ -861,6 +877,13 @@ func postProfile(c echo.Context) error {
 	}
 
 	if avatarName != "" && len(avatarData) > 0 {
+		redirect := hosts[hash(avatarName) % len(hosts)]
+		if redirect != me {
+			url_ := c.Request().URL
+			toURL := url_.Scheme + "//" + url_.User.String() + redirect + "/" + c.Path()
+			log.Println("postProfile redirect to:", toURL)
+			c.Redirect(http.StatusTemporaryRedirect, toURL)
+		}
 		err := ioutil.WriteFile(iconsDir + "/" + avatarName, avatarData, 0777)
 		if err != nil {
 			log.Println("Failed to PostProfile3:", err)
@@ -891,13 +914,21 @@ func postProfile(c echo.Context) error {
 func getIcon(c echo.Context) error {
 	txn := app.StartTransaction("getIcon", c.Response().Writer, c.Request())
 	defer txn.End()
-	fname := iconsDir + "/" + c.Param("file_name")
-	if _, err := os.Stat(fname); os.IsNotExist(err) {
+	fname := c.Param("file_name")
+	fpath := iconsDir + "/" + fname
+	redirect := hosts[hash(fname) % len(hosts)]
+	if redirect != me {
+		url_ := c.Request().URL
+		toURL := url_.Scheme + "//" + url_.User.String() + redirect + "/" + c.Path()
+		log.Println("getIcon Redirect to:", toURL)
+		c.Redirect(http.StatusSeeOther, toURL)
+	}
+	if _, err := os.Stat(fpath); os.IsNotExist(err) {
 		var name string
 		var data []byte
 		s := StartMySQLSegment(txn, "image", "SELECT")
 		err := db.QueryRow("SELECT name, data FROM image WHERE name = ?",
-			c.Param("file_name")).Scan(&name, &data)
+			fname).Scan(&name, &data)
 		s.End()
 		if err == sql.ErrNoRows {
 			return echo.ErrNotFound
@@ -923,7 +954,7 @@ func getIcon(c echo.Context) error {
 		log.Println("Failed to getIcon2:", err)
 		return err
 	}
-	data, err := ioutil.ReadFile(fname)
+	data, err := ioutil.ReadFile(fpath)
 	if err != nil {
 		log.Println("Failed to getIcon3:", err)
 		return err
@@ -931,13 +962,13 @@ func getIcon(c echo.Context) error {
 	etag := sha1.Sum(data)
 	w := c.Response().Writer
 	w.Header().Set("ETag", strconv.Quote(string(etag[:])))
-	file, err := os.Open(fname)
+	file, err := os.Open(fpath)
 	if err != nil {
 		log.Println("Failed to getIcon4:", err)
 		return err
 	}
 	defer file.Close()
-	http.ServeContent(w, c.Request(), fname, time.Time{}, file)
+	http.ServeContent(w, c.Request(), fpath, time.Time{}, file)
 	return nil
 }
 
