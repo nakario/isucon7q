@@ -18,7 +18,6 @@ import (
 	"time"
 	"hash/fnv"
 	"net/url"
-	"bytes"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
