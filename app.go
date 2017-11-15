@@ -1032,7 +1032,7 @@ func postIcon(c echo.Context) error {
 		}
 	}
 
-	return c.String(http.StatusOK, "")
+	return c.NoContent(http.StatusOK)
 }
 
 func tAdd(a, b int64) int64 {
