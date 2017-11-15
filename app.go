@@ -24,6 +24,7 @@ import (
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/middleware"
 	"github.com/newrelic/go-agent"
+	"github.com/go-redis/redis"
 )
 
 const (
@@ -35,6 +36,7 @@ var (
 	db            *sqlx.DB
 	ErrBadReqeust = echo.NewHTTPError(http.StatusBadRequest)
 	app newrelic.Application
+	rd *redis.Client
 )
 
 type Renderer struct {
@@ -93,6 +95,32 @@ func init() {
 	db.SetMaxOpenConns(20)
 	db.SetConnMaxLifetime(5 * time.Minute)
 	log.Printf("Succeeded to connect db.")
+
+	redis_host := os.Getenv("ISUBATA_REDIS_HOST")
+	if redis_host == "" {
+		redis_host = "127.0.0.1"
+	}
+	redis_port := os.Getenv("ISUBATA_REDIS_PORT")
+	if redis_port == "" {
+		redis_port = "6379"
+	}
+
+	rd = redis.NewClient(&redis.Options{
+		Addr: redis_host + ":" + redis_port,
+		Password: "",
+		DB: 0,
+	})
+
+	for {
+		err := rd.Ping().Err()
+		if err == nil {
+			break
+		}
+		log.Println(err)
+		time.Sleep(time.Second * 3)
+	}
+
+	log.Println("Succeeded to connect redis.")
 }
 
 type User struct {
@@ -103,6 +131,10 @@ type User struct {
 	DisplayName string    `json:"display_name" db:"display_name"`
 	AvatarIcon  string    `json:"avatar_icon" db:"avatar_icon"`
 	CreatedAt   time.Time `json:"-" db:"created_at"`
+}
+
+func keyHaveread(user, ch int64) string {
+	return fmt.Sprintf("haveread:%d:%d", user, ch)
 }
 
 func getUser(txn newrelic.Transaction, userID int64) (*User, error) {
@@ -262,7 +294,7 @@ func getInitialize(c echo.Context) error {
 	}()
 	db.MustExec("DELETE FROM channel WHERE id > 10")
 	db.MustExec("DELETE FROM message WHERE id > 10000")
-	db.MustExec("DELETE FROM haveread")
+	rd.FlushDB().Err()
 	<-after
 	return c.String(204, "")
 }
@@ -505,12 +537,7 @@ func getMessage(c echo.Context) error {
 	response, newLastID, err := queryResponse(txn, chanID, lastID)
 
 	if len(response) > 0 {
-		s := StartMySQLSegment(txn, "haveread", "INSERT")
-		_, err := db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
-			" VALUES (?, ?, ?, NOW(), NOW())"+
-			" ON DUPLICATE KEY UPDATE message_id = ?, updated_at = NOW()",
-			userID, chanID, newLastID, newLastID)
-		s.End()
+		err := rd.Set(keyHaveread(userID, chanID), newLastID, 0).Err()
 		if err != nil {
 			return err
 		}
@@ -528,26 +555,7 @@ func queryChannels(txn newrelic.Transaction) ([]int64, error) {
 }
 
 func queryHaveRead(txn newrelic.Transaction, userID, chID int64) (int64, error) {
-	type HaveRead struct {
-		UserID    int64     `db:"user_id"`
-		ChannelID int64     `db:"channel_id"`
-		MessageID int64     `db:"message_id"`
-		UpdatedAt time.Time `db:"updated_at"`
-		CreatedAt time.Time `db:"created_at"`
-	}
-	h := HaveRead{}
-
-	s := StartMySQLSegment(txn, "haveread", "SELECT")
-	err := db.Get(&h, "SELECT * FROM haveread WHERE user_id = ? AND channel_id = ?",
-		userID, chID)
-	s.End()
-
-	if err == sql.ErrNoRows {
-		return 0, nil
-	} else if err != nil {
-		return 0, err
-	}
-	return h.MessageID, nil
+	return rd.Get(keyHaveread(userID, chID)).Int64()
 }
 
 func fetchUnread(c echo.Context) error {
